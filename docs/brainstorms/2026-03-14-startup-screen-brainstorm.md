@@ -1,3 +1,10 @@
+---
+title: "Brainstorm: Friendly Startup Screen"
+date: 2026-03-14
+status: Implemented
+generated-by: ce:brainstorm
+---
+
 # Brainstorm: Friendly Startup Screen
 
 **Date:** 2026-03-14
@@ -22,9 +29,47 @@ The original code initialised `sensorError = false` and immediately called
 ~1750 ms — accurate in format but misleading in content since no reading had
 been taken yet.
 
-Simply setting `sensorError = true` at startup would have shown `"No Sensor!"`
-immediately, which is technically correct but unnecessarily alarming. The
-friendly startup screen is more appropriate for an end-user device.
+Two simpler alternatives were rejected:
+
+- **Do nothing / fix the value shown:** Still requires ~1750 ms of either blank
+  display or misleading data. Doesn't communicate to the user that the device
+  is initialising.
+- **Set `sensorError = true` at startup:** Would show `"No Sensor!"` immediately
+  at boot — technically correct but unnecessarily alarming for an end-user device
+  that hasn't had time to detect anything yet.
+
+The flashing startup screen was chosen because it communicates activity, looks
+deliberate, and avoids showing any temperature data until there is a real reading
+to show.
+
+---
+
+## Approaches Considered
+
+### Approach A — Flash the backlight (rejected)
+Toggle the LCD backlight on/off during startup. Simple to implement (one bit in
+PCF8574 `P3`).
+
+**Pros:** Minimal code.
+**Cons:** Looks cheap and distracting. Backlight flicker is associated with
+hardware problems, not friendly boot sequences.
+
+### Approach B — Flash the text (chosen ✅)
+Toggle `" Please wait... "` / `"                "` on line 1 every 500 ms.
+Line 0 left blank.
+
+**Pros:** Professional appearance. Text on/off is clearly intentional. Easy to
+read during the on-phase. Works within the existing `lcd_print_str()` API.
+**Cons:** Requires tracking two extra state variables (`lastFlash`, `flashVisible`).
+
+### Approach C — Static message, no flash
+Display `" Please wait... "` statically until the first read completes.
+
+**Pros:** Even simpler — no flash state variables.
+**Cons:** A static message looks frozen. The user has no visual feedback that
+the device is doing something. Flash was preferred for this reason.
+
+**Chosen: Approach B.**
 
 ---
 
@@ -67,11 +112,17 @@ friendly startup screen is more appropriate for an end-user device.
 - *Should button presses be blocked during startup?*
   No — setpoint still adjustable, LCD update just deferred.
 
+- *Flash the text or the backlight?*
+  Text. Backlight flash looks like a hardware fault.
+
+- *Should a static message be used instead of a flash?*
+  No. Static looks frozen; flash communicates active initialisation.
+
 ---
 
-## Files Changed
+## Files to Change
 
 | File | Change |
 |------|--------|
-| `config.h` | Added `STARTUP_MIN_MS 2000UL` and `FLASH_PERIOD_MS 500UL` |
-| `main.c` | Added `firstRead`, `firstReadDone`, `startupTime`, `lastFlash`, `flashVisible` state; startup flash block in main loop; `firstReadDone = true` after first read attempt; all in-loop `update_lcd()` calls guarded with `if (!firstRead)` |
+| `config.h` | Add `STARTUP_MIN_MS 2000UL` and `FLASH_PERIOD_MS 500UL` |
+| `main.c` | Add `firstRead`, `firstReadDone`, `startupTime`, `lastFlash`, `flashVisible` state; startup flash block in main loop; `firstReadDone = true` after first read attempt; all in-loop `update_lcd()` calls guarded with `if (!firstRead)` |

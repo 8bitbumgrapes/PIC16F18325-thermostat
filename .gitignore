@@ -17,3 +17,6 @@ nbproject/private/
 
 # Claude Code local settings
 .claude/
+
+# Local session handoff notes (not for repo)
+handoff.txt
