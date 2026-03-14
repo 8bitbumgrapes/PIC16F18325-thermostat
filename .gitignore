@@ -1,0 +1,19 @@
+# MPLAB X build output
+build/
+dist/
+nbproject/private/
+*.d
+*.o
+*.p1
+*.pre
+*.elf
+*.hex
+*.map
+*.lst
+*.sym
+
+# MPLAB X project files (keep .X directory but ignore generated files)
+*.X.user
+
+# Claude Code local settings
+.claude/
