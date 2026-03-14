@@ -68,14 +68,6 @@ void uart_puts(const char *s)
 }
 
 /* =========================================================
- * uart_puts_P  — alias for uart_puts on PIC16 (no PROGMEM)
- * ========================================================= */
-void uart_puts_P(const char *s)
-{
-    uart_puts(s);
-}
-
-/* =========================================================
  * uart_print_float
  *
  * Strategy:
@@ -108,6 +100,10 @@ void uart_print_float(float val, uint8_t decimals)
     if (decimals > 4u) {
         decimals = 4u;
     }
+
+    /* Clamp value — uint32_t scaled overflows above ~429,496 °C */
+    if (val >  9999.9f) val =  9999.9f;
+    if (val < -9999.9f) val = -9999.9f;
 
     /* Sign */
     if (val < 0.0f) {

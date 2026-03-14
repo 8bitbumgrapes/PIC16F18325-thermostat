@@ -35,15 +35,6 @@ void uart_putc(char c);
 void uart_puts(const char *s);
 
 /**
- * uart_puts_P() — Identical to uart_puts().  Provided for source
- *                 compatibility with AVR/Arduino code that uses
- *                 F() / PROGMEM strings.  On XC8 for PIC16 there
- *                 is no Harvard-architecture string separation, so
- *                 this is a straight alias.
- */
-void uart_puts_P(const char *s);
-
-/**
  * uart_print_float() — Print a float value with `decimals` digits
  *                       after the decimal point.  Uses integer
  *                       decomposition — no printf/sprintf.

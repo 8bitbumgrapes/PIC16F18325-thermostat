@@ -20,8 +20,13 @@
 
 /* ---------------------------------------------------------
  * CRC-8 (Dallas / Maxim)
- *   Polynomial : 0x31  (x^8 + x^5 + x^4 + 1), reflected form
+ *   Polynomial : 0x31  (x^8 + x^5 + x^4 + 1), reflected form 0x8C
  *   Init value : 0x00
+ *
+ * Test vector (DS18B20 scratchpad example):
+ *   Data : 0x50 0x05 0x4B 0x46 0x7F 0xFF 0x0C 0x10  (bytes 0–7)
+ *   CRC  : 0x1C  (byte 8 of the scratchpad must equal this)
+ *   i.e. crc8_update(0x00, data[0..7]) == 0x1C
  * --------------------------------------------------------- */
 static uint8_t crc8_update(uint8_t crc, uint8_t data)
 {

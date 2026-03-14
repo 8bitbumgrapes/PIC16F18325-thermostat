@@ -148,6 +148,10 @@ static void fmt_temp(float val, char buf[6])
     uint8_t units;
     uint8_t tens;
 
+    /* Clamp to display range — DS18B20 is -55..+125 but guard anyway */
+    if (val >  999.9f) val =  999.9f;
+    if (val < -99.9f)  val = -99.9f;
+
     /* Round to one decimal place */
     t10 = (int16_t)(val * 10.0f + (val >= 0.0f ? 0.5f : -0.5f));
     neg = (t10 < 0);
