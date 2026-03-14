@@ -47,12 +47,14 @@ static void eeprom_write_byte(uint8_t addr, uint8_t data)
     NVMCON2 = 0x55u;
     NVMCON2 = 0xAAu;
     NVMCON1bits.WR = 1;        /* start write cycle             */
-    ei();
 
-    /* Wait for write to complete (WR cleared by hardware) */
+    /* Wait for write to complete (WR cleared by hardware).
+     * Keep GIE disabled until WR clears — re-enabling before this
+     * point would allow an ISR to corrupt the NVM state machine. */
     while (NVMCON1bits.WR) {
-        /* spin — typically ~4 ms on this device */
+        CLRWDT();   /* kick WDT during ~4 ms write cycle */
     }
+    ei();
 
     NVMCON1bits.WREN = 0;      /* disable further writes        */
 }

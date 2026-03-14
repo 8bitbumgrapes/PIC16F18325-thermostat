@@ -65,6 +65,18 @@
 #define STARTUP_MIN_MS    2000UL    /* Minimum startup screen display time  */
 #define FLASH_PERIOD_MS   500UL     /* Please-wait flash toggle period      */
 
+/* Safety cutoff hysteresis — relay re-enables below this temperature.
+ * Prevents relay chatter when sensor reads hover near MAX_SAFE_TEMP. */
+#define CUTOFF_RESET_TEMP 29.0f    /* °C: cutoff clears below this value   */
+
+/* Timer1 preload for 1 ms overflow at 32 MHz (Fosc/4 = 8 MHz instruction clock).
+ * Count = 65536 - (8 000 000 / 1000) = 65536 - 8000 = 57536 = 0xE0C0        */
+#define TMR1_PRELOAD_H    0xE0u
+#define TMR1_PRELOAD_L    0xC0u
+
+/* Set to 0 to build a silent production binary (no UART output). */
+#define DEBUG_UART        1
+
 /* EEPROM base address for setpoint float (4 bytes: 0x00 – 0x03) */
 #define EEPROM_ADDR       0x00
 

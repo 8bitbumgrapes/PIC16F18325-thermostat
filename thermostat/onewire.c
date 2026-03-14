@@ -123,6 +123,7 @@ uint8_t ow_read_byte(void)
         __delay_us(6);
         OW_RELEASE();
         __delay_us(3);                /* 6+3 = 9 µs — sample window */
+        NOP(); NOP();                 /* anchor sample point ≥ 9 µs from release */
 
         if (OW_READ()) {
             b |= 0x80u;              /* MSB position after >> above */

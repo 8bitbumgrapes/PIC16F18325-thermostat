@@ -20,22 +20,34 @@
 #include "eeprom_float.h"
 #include "uart.h"
 
+/* ---------------------------------------------------------
+ * Debug UART wrappers — compile out for production builds.
+ * Set DEBUG_UART to 0 in config.h for a silent binary.
+ * --------------------------------------------------------- */
+#if DEBUG_UART
+#  define debug_puts(s)          uart_puts(s)
+#  define debug_print_float(v,d) uart_print_float((v),(d))
+#else
+#  define debug_puts(s)          do { } while(0)
+#  define debug_print_float(v,d) do { } while(0)
+#endif
+
 /* =========================================================
  * Timer1 — 1 ms tick counter
  *
  * Fosc/4 = 8 MHz instruction clock
  * Prescaler 1:1 → timer increments at 8 MHz
- * Preload  : 65536 - 8000 = 57536  (0xE0C0)
+ * Preload  : 65536 - 8000 = 57536  (0xE0C0, see config.h)
  * Overflow : every 8000 counts = 1 ms exactly
  * ========================================================= */
 volatile uint32_t ms_ticks = 0;
 
 void timer1_init(void)
 {
-    T1CON  = 0x01u;      /* TMR1ON=1, prescaler 1:1, Fosc/4, sync */
-    TMR1H  = 0xE0u;      /* preload high byte                      */
-    TMR1L  = 0xC0u;      /* preload low  byte  (0xE0C0 = 57536)    */
-    PIE1bits.TMR1IE = 1; /* enable Timer1 overflow interrupt        */
+    T1CON  = 0x01u;              /* TMR1ON=1, prescaler 1:1, Fosc/4, sync */
+    TMR1H  = TMR1_PRELOAD_H;    /* preload high byte                      */
+    TMR1L  = TMR1_PRELOAD_L;    /* preload low  byte  (0xE0C0 = 57536)    */
+    PIE1bits.TMR1IE = 1;        /* enable Timer1 overflow interrupt        */
 }
 
 /* ---------------------------------------------------------
@@ -47,8 +59,8 @@ void __interrupt() isr(void)
 {
     if (PIR1bits.TMR1IF) {
         /* Reload preload value — must be done first to minimise jitter */
-        TMR1H = 0xE0u;
-        TMR1L = 0xC0u;
+        TMR1H = TMR1_PRELOAD_H;
+        TMR1L = TMR1_PRELOAD_L;
         PIR1bits.TMR1IF = 0;
         ms_ticks++;
     }
@@ -69,10 +81,20 @@ static inline uint32_t millis(void)
 }
 
 /* =========================================================
+ * Sensor state machine
+ * ========================================================= */
+typedef enum {
+    SENSOR_UNKNOWN = 0,   /* initial state — no read attempted yet */
+    SENSOR_OK,            /* last read was valid                    */
+    SENSOR_ERROR,         /* read failed; sensor never seen         */
+    SENSOR_LOST           /* read failed; sensor was previously OK  */
+} sensor_state_t;
+
+/* =========================================================
  * Application state  (matches Arduino globals)
  * ========================================================= */
-static bool     sensorOk             = false;
-static bool     sensorError          = false;
+static sensor_state_t sensor_state          = SENSOR_UNKNOWN;
+static bool     cutoffActive         = false;
 static bool     conversionRequested  = false;
 static uint32_t lastRequest          = 0;
 static bool     relayOn              = false;
@@ -82,9 +104,27 @@ static uint32_t lastBtnTime          = 0;
 static bool     btnUpArmed           = true;
 static bool     btnDownArmed         = true;
 
-/* Startup screen state */
-static bool     firstRead            = true;   /* true until startup screen dismissed */
-static bool     firstReadDone        = false;  /* true once first sensor cycle done   */
+/* ---------------------------------------------------------
+ * Startup screen state
+ *
+ * firstRead    : true from power-on until the startup splash
+ *                screen has been shown long enough and at least
+ *                one sensor read cycle (successful or not) has
+ *                completed.  While true, update_lcd() is
+ *                suppressed so the splash is not overwritten.
+ *
+ * firstReadDone: set to true once the first full read cycle
+ *                (conversion + scratchpad read, or a detected
+ *                sensor absence) has finished.  Combined with
+ *                a minimum display timer, this gates the
+ *                transition from splash to normal operation.
+ *
+ * startupTime  : millis() snapshot taken at the moment the
+ *                splash screen appears.  Used to enforce the
+ *                STARTUP_MIN_MS minimum display duration.
+ * --------------------------------------------------------- */
+static bool     firstRead            = true;
+static bool     firstReadDone        = false;
 static uint32_t startupTime          = 0;
 static uint32_t lastFlash            = 0;
 static bool     flashVisible         = true;
@@ -153,8 +193,8 @@ static void update_lcd(float tempC)
 
     /* --- Line 0 --- */
     lcd_set_cursor(0, 0);
-    if (sensorError) {
-        if (sensorOk) {
+    if (sensor_state == SENSOR_ERROR || sensor_state == SENSOR_LOST) {
+        if (sensor_state == SENSOR_LOST) {
             lcd_print_str("Sensor Lost!    ");
         } else {
             lcd_print_str("No Sensor!      ");
@@ -169,7 +209,7 @@ static void update_lcd(float tempC)
 
     /* --- Line 1 --- */
     lcd_set_cursor(0, 1);
-    if (!sensorError && tempC >= MAX_SAFE_TEMP) {
+    if (cutoffActive) {
         /* Safety cutoff active */
         if (relayOn) {
             lcd_print_str("CUTOFF        ON");
@@ -227,6 +267,21 @@ static void hardware_init(void)
 }
 
 /* =========================================================
+ * apply_setpoint_change()  —  shared by both button handlers
+ * ========================================================= */
+static void apply_setpoint_change(float delta)
+{
+    setpointC += delta;
+    if (setpointC > SETPOINT_MAX) setpointC = SETPOINT_MAX;
+    if (setpointC < SETPOINT_MIN) setpointC = SETPOINT_MIN;
+    eeprom_write_float(EEPROM_ADDR, setpointC);
+    debug_puts(delta > 0.0f ? "Setpoint UP: " : "Setpoint DOWN: ");
+    debug_print_float(setpointC, 1);
+    debug_puts(" C\r\n");
+    if (!firstRead) update_lcd(lastTemp);
+}
+
+/* =========================================================
  * main()
  * ========================================================= */
 void main(void)
@@ -236,16 +291,16 @@ void main(void)
     hardware_init();
 
     /* UART banner */
-    uart_puts("PIC16F18325 Thermostat starting\r\n");
+    debug_puts("PIC16F18325 Thermostat starting\r\n");
 
     /* --- Read saved setpoint from EEPROM (mirrors Arduino EEPROM.get) --- */
     saved = eeprom_read_float(EEPROM_ADDR);
     if (saved >= SETPOINT_MIN && saved <= SETPOINT_MAX) {
         setpointC = saved;
     }
-    uart_puts("Setpoint: ");
-    uart_print_float(setpointC, 1);
-    uart_puts(" C\r\n");
+    debug_puts("Setpoint: ");
+    debug_print_float(setpointC, 1);
+    debug_puts(" C\r\n");
 
     /* --- LCD --- */
     lcd_init();
@@ -318,32 +373,11 @@ void main(void)
             if (!curBtnUp && btnUpArmed) {
                 btnUpArmed  = false;
                 lastBtnTime = now;
-
-                setpointC = setpointC + SETPOINT_STEP;
-                if (setpointC > SETPOINT_MAX) setpointC = SETPOINT_MAX;
-
-                eeprom_write_float(EEPROM_ADDR, setpointC);
-
-                uart_puts("Setpoint UP: ");
-                uart_print_float(setpointC, 1);
-                uart_puts(" C\r\n");
-
-                if (!firstRead) update_lcd(lastTemp);
-
+                apply_setpoint_change(SETPOINT_STEP);
             } else if (!curBtnDown && btnDownArmed) {
                 btnDownArmed = false;
                 lastBtnTime  = now;
-
-                setpointC = setpointC - SETPOINT_STEP;
-                if (setpointC < SETPOINT_MIN) setpointC = SETPOINT_MIN;
-
-                eeprom_write_float(EEPROM_ADDR, setpointC);
-
-                uart_puts("Setpoint DOWN: ");
-                uart_print_float(setpointC, 1);
-                uart_puts(" C\r\n");
-
-                if (!firstRead) update_lcd(lastTemp);
+                apply_setpoint_change(-SETPOINT_STEP);
             }
         }
 
@@ -353,11 +387,11 @@ void main(void)
         if (!conversionRequested && (now - lastRequest >= READ_INTERVAL)) {
 
             if (ds18b20_start_conversion()) {
-                uart_puts("Conversion started\r\n");
+                debug_puts("Conversion started\r\n");
             } else {
-                uart_puts("No sensor present\r\n");
-                sensorError = true;
-                sensorOk    = false;
+                debug_puts("No sensor present\r\n");
+                sensor_state  = SENSOR_ERROR;
+                firstReadDone = true;   /* unblock startup on persistent no-sensor */
                 set_relay(false);
                 if (!firstRead) update_lcd(0.0f);
             }
@@ -380,40 +414,48 @@ void main(void)
         readOk = ds18b20_read_temp(&tempC);
 
         if (!readOk || tempC < -55.0f || tempC > 125.0f) {
-            sensorError = true;
-            set_relay(false);
-
-            if (sensorOk) {
-                /* Sensor was OK before — try to reinitialise the bus */
-                uart_puts("Sensor lost — reinitialising bus\r\n");
+            if (sensor_state == SENSOR_OK) {
+                /* Sensor was OK before — transition to LOST and reinit bus */
+                sensor_state = SENSOR_LOST;
+                debug_puts("Sensor lost — reinitialising bus\r\n");
                 ow_init();
             } else {
-                uart_puts("No sensor / CRC error\r\n");
+                if (sensor_state != SENSOR_LOST) {
+                    sensor_state = SENSOR_ERROR;
+                }
+                debug_puts("No sensor / CRC error\r\n");
             }
-
+            set_relay(false);
             if (!firstRead) update_lcd(0.0f);
             continue;
         }
 
         /* Valid reading */
-        sensorOk    = true;
-        sensorError = false;
-        lastTemp    = tempC;
+        sensor_state = SENSOR_OK;
+        lastTemp     = tempC;
 
-        uart_puts("Temp: ");
-        uart_print_float(tempC, 2);
-        uart_puts(" C  Setpoint: ");
-        uart_print_float(setpointC, 1);
-        uart_puts(" C\r\n");
+        debug_puts("Temp: ");
+        debug_print_float(tempC, 2);
+        debug_puts(" C  Setpoint: ");
+        debug_print_float(setpointC, 1);
+        debug_puts(" C\r\n");
 
         /* -----------------------------------------------
-         * Safety cutoff
+         * Safety cutoff with hysteresis
+         * -----------------------------------------------
+         * cutoffActive latches on when temp reaches MAX_SAFE_TEMP.
+         * It does not clear until temp drops below CUTOFF_RESET_TEMP,
+         * preventing relay chatter near the 30 °C boundary.
          * ----------------------------------------------- */
         if (tempC >= MAX_SAFE_TEMP) {
+            cutoffActive = true;
+        } else if (cutoffActive && tempC < CUTOFF_RESET_TEMP) {
+            cutoffActive = false;
+        }
+
+        if (cutoffActive) {
             set_relay(false);
-
-            uart_puts("SAFETY CUTOFF — relay OFF\r\n");
-
+            debug_puts("SAFETY CUTOFF — relay OFF\r\n");
             if (!firstRead) update_lcd(tempC);
             continue;
         }
@@ -431,7 +473,7 @@ void main(void)
 
         if (desired != relayOn) {
             set_relay(desired);
-            uart_puts(relayOn ? "Relay ON\r\n" : "Relay OFF\r\n");
+            debug_puts(relayOn ? "Relay ON\r\n" : "Relay OFF\r\n");
         }
 
         if (!firstRead) update_lcd(tempC);
