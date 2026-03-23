@@ -34,29 +34,16 @@ typedef union {
  * ========================================================= */
 static void eeprom_write_byte(uint8_t addr, uint8_t data)
 {
-    /* Point to EEPROM (NVMREGS=0) */
     NVMADRH = 0x00u;
     NVMADRL = addr;
     NVMDATL = data;
-
-    NVMCON1bits.NVMREGS = 0;   /* select data EEPROM            */
-    NVMCON1bits.WREN    = 1;   /* enable writes                 */
-
-    /* --- Critical section: unlock sequence + WR --- */
-    di();
+    NVMCON1bits.NVMREGS = 0;
+    NVMCON1bits.WREN    = 1;
     NVMCON2 = 0x55u;
     NVMCON2 = 0xAAu;
-    NVMCON1bits.WR = 1;        /* start write cycle             */
-
-    /* Wait for write to complete (WR cleared by hardware).
-     * Keep GIE disabled until WR clears — re-enabling before this
-     * point would allow an ISR to corrupt the NVM state machine. */
-    while (NVMCON1bits.WR) {
-        CLRWDT();   /* kick WDT during ~4 ms write cycle */
-    }
-    ei();
-
-    NVMCON1bits.WREN = 0;      /* disable further writes        */
+    NVMCON1bits.WR = 1;
+    /* BISECT: polling loop omitted — not waiting for write to complete */
+    NVMCON1bits.WREN = 0;
 }
 
 /* =========================================================

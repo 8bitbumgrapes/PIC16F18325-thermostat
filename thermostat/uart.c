@@ -22,15 +22,17 @@ void uart_init(void)
     UART_TX_ANSEL = 0;
     UART_TX_TRIS  = 0;
 
-    /* Map EUSART1 TX to RA0 via PPS
-     * PPS output code 0x10 = TX1 / CK1              */
-    RA0PPS = 0x10u;
-
     /* Baud rate: BRG16=1 (16-bit BRG), BRGH=1 (high speed)
      * SP1BRGH:SP1BRGL = 68                           */
     BAUD1CON  = 0x08u;   /* BRG16 = 1, all others 0  */
     SP1BRGH   = 0x00u;
     SP1BRGL   = 68u;
+
+    /* Enable serial port FIRST (SPEN=1), THEN enable transmitter (TXEN=1).
+     * PIC16 EUSART: setting TXEN before SPEN latches TX line LOW.
+     * CREN=0: receiver disabled (TX-only).
+     * RC1STA: SPEN=1 only → 0x80 = 0b10000000                     */
+    RC1STA = 0x80u;
 
     /* TX1STA: TXEN=1, BRGH=1, SYNC=0 (async)
      * Bit layout: CSRC TX9 TXEN SYNC SENDB BRGH TRMT TX9D
@@ -38,11 +40,11 @@ void uart_init(void)
      * 0x24 = 0b00100100                              */
     TX1STA = 0x24u;
 
-    /* RC1STA: SPEN=1, CREN=1 (enables the serial port)
-     * Bit layout: SPEN RX9 SREN CREN ADDEN FERR OERR RX9D
-     *             1    0   0   1    0     0    0   0
-     * 0x90 = 0b10010000                              */
-    RC1STA = 0x90u;
+    /* Map EUSART1 TX to RA0 via PPS — done LAST, after SPEN+TXEN are set.
+     * A disabled peripheral PPS output drives LOW (0); mapping before
+     * the peripheral is enabled latches the pin LOW permanently.
+     * PPS output code 0x14 (20) = TX/CK  (from DFP edc:ppsval="20") */
+    RA0PPS = 0x14u;
 }
 
 /* =========================================================
@@ -81,12 +83,10 @@ void uart_puts(const char *s)
  * ========================================================= */
 void uart_print_float(float val, uint8_t decimals)
 {
-    /* Scale factors for 0..4 decimal places */
-    static const uint32_t scale[5] = { 1UL, 10UL, 100UL, 1000UL, 10000UL };
-
     char     buf[12];
     uint8_t  pos;
     uint8_t  i;
+    uint32_t scale_val;
     uint32_t scaled;
     uint32_t intpart;
     uint32_t fracpart;
@@ -101,6 +101,13 @@ void uart_print_float(float val, uint8_t decimals)
         decimals = 4u;
     }
 
+    /* Compute 10^decimals inline — avoids static const array in RAM
+     * (XC8 free places const arrays via init_ram, not __flash) */
+    scale_val = 1UL;
+    for (i = 0u; i < decimals; i++) {
+        scale_val *= 10UL;
+    }
+
     /* Clamp value — uint32_t scaled overflows above ~429,496 °C */
     if (val >  9999.9f) val =  9999.9f;
     if (val < -9999.9f) val = -9999.9f;
@@ -112,11 +119,11 @@ void uart_print_float(float val, uint8_t decimals)
     }
 
     /* Round before splitting */
-    val += 0.5f / (float)scale[decimals];
+    val += 0.5f / (float)scale_val;
 
-    scaled   = (uint32_t)(val * (float)scale[decimals]);
-    intpart  = scaled / scale[decimals];
-    fracpart = scaled % scale[decimals];
+    scaled   = (uint32_t)(val * (float)scale_val);
+    intpart  = scaled / scale_val;
+    fracpart = scaled % scale_val;
 
     /* Build integer part string (reversed into buf) */
     if (intpart == 0UL) {
@@ -136,12 +143,13 @@ void uart_print_float(float val, uint8_t decimals)
     /* Fractional part */
     if (decimals > 0u) {
         uart_putc('.');
-        /* Extract digits MSB-first into frac_digits[] */
+        /* Extract digits MSB-first: d steps down from 10^(decimals-1) to 1 */
         tmp = fracpart;
-        for (i = decimals; i > 0u; i--) {
-            d = scale[i - 1u];
-            frac_digits[decimals - i] = (uint8_t)(tmp / d);
+        d   = scale_val / 10UL;
+        for (i = 0u; i < decimals; i++) {
+            frac_digits[i] = (uint8_t)(tmp / d);
             tmp %= d;
+            if (d >= 10UL) { d /= 10UL; } else { d = 1UL; }
         }
         for (i = 0u; i < decimals; i++) {
             uart_putc((char)('0' + frac_digits[i]));

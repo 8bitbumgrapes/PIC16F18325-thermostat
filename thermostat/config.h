@@ -29,25 +29,20 @@
 /* CONFIG2 */
 #pragma config MCLRE    = OFF       /* MCLR pin is GPIO (RA3 = input only)  */
 #pragma config PWRTE    = ON        /* Power-up timer enabled               */
-#pragma config WDTE     = ON        /* WDT enabled (hardware)               */
+#pragma config WDTE     = OFF       /* WDT disabled (temporary debug)       */
 #pragma config LPBOREN  = OFF       /* Low-Power BOR disabled               */
-#pragma config BOREN    = ON        /* Brown-out reset enabled              */
-#pragma config BORV     = LO        /* BOR voltage: low trip point          */
-#pragma config ZCD      = OFF       /* ZCD disabled                         */
+#pragma config BOREN    = OFF       /* Brown-out disabled — FT232 supply dips during init */
+#pragma config BORV     = LOW       /* BOR voltage: low trip point (~2.45V) */
 #pragma config PPS1WAY  = OFF       /* PPS can be changed multiple times    */
 #pragma config STVREN   = ON        /* Stack overflow/underflow reset        */
 
-/* CONFIG3 — WDT period ≈ 4.7 s (WDTCPS_13 = 4096 * 1.152 ms) */
-#pragma config WDTCPS   = WDTCPS_13 /* WDT period ~4.7 s                   */
-#pragma config WDTCWS   = WDTCWS_7  /* WDT window: always open (100%)       */
-#pragma config WDTCAS   = WDTCAS_1  /* WDT always active (not gated)        */
-
-/* CONFIG4 */
+/* CONFIG3 */
+/* NOTE: WDT period (WDTPS) is not a config-word setting in DFP 1.7.146.
+ * It is configured at runtime via WDTCONbits.WDTPS in hardware_init().   */
 #pragma config WRT      = OFF       /* Flash write protection off           */
-#pragma config SCANE    = AVAILABLE /* Scanner available                    */
 #pragma config LVP      = ON        /* Low-voltage programming enabled      */
 
-/* CONFIG5 */
+/* CONFIG4 */
 #pragma config CP       = OFF       /* Code protection off                  */
 
 /* ---------------------------------------------------------
@@ -76,6 +71,10 @@
 
 /* Set to 0 to build a silent production binary (no UART output). */
 #define DEBUG_UART        1
+
+/* Set to 1 to disable all LCD output — all lcd_* calls become no-ops.
+ * Useful for testing UART / DS18B20 / relay independently of I2C. */
+#define NO_LCD            0
 
 /* EEPROM base address for setpoint float (4 bytes: 0x00 – 0x03) */
 #define EEPROM_ADDR       0x00

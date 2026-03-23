@@ -16,6 +16,7 @@
 
 #include "config.h"
 #include "lcd_i2c.h"
+#include "uart.h"
 
 /* ---------------------------------------------------------
  * PCF8574 bit masks
@@ -41,74 +42,69 @@
 static uint8_t s_backlight = PCF_BL;   /* default: on */
 
 /* =========================================================
- * Internal I2C helpers (MSSP1 polling, no interrupts)
+ * Internal I2C helpers — bit-bang, RC0=SCL, RC1=SDA.
+ *
+ * Open-drain emulation (same approach as 1-Wire):
+ *   Drive LOW  : LAT=0, TRIS=0  (output, driven low)
+ *   Release    : TRIS=1         (input, external pullup pulls HIGH)
+ *
+ * 100 kHz: half-period = 5 µs.
  * ========================================================= */
+#define SCL_LOW()   do { LATCbits.LATC0 = 0; TRISCbits.TRISC0 = 0; } while(0)
+#define SCL_HIGH()  do { TRISCbits.TRISC0 = 1; } while(0)
+#define SDA_LOW()   do { LATCbits.LATC1 = 0; TRISCbits.TRISC1 = 0; } while(0)
+#define SDA_HIGH()  do { TRISCbits.TRISC1 = 1; } while(0)
+#define SDA_READ()  (PORTCbits.RC1)
 
-/**
- * i2c_init() — Configure MSSP1 for I2C master, 100 kHz at 32 MHz Fosc.
- *
- * Baud rate: SSP1ADD = (Fosc / (4 * Fscl)) - 1
- *            = (32 000 000 / (4 * 100 000)) - 1
- *            = 80 - 1 = 79  (0x4F)
- *
- * RC0 and RC1 must be configured as inputs with open-drain outputs
- * (the MSSP peripheral controls the lines).
- */
+#define I2C_HALF_US 5u
+
 static void i2c_init(void)
 {
-    /* Pins: input, digital, no pull-up needed (external 4k7) */
-    TRISCbits.TRISC0  = 1;
-    TRISCbits.TRISC1  = 1;
-    ANSELCbits.ANSC0  = 0;
-    ANSELCbits.ANSC1  = 0;
-
-    SSP1STAT = 0x80u;   /* SMP=1 (slew rate disabled for 100 kHz)  */
-    SSP1ADD  = 79u;     /* Baud rate divider for 100 kHz @ 32 MHz   */
-    SSP1CON1 = 0x28u;   /* SSPEN=1, SSPM=1000 (I2C master mode)    */
-    SSP1CON2 = 0x00u;
-    SSP1CON3 = 0x00u;
-}
-
-/** Wait for the MSSP1 interrupt flag (operation complete). */
-static void i2c_wait(void)
-{
-    while (!PIR1bits.SSP1IF) {
-        /* spin */
-    }
-    PIR1bits.SSP1IF = 0;
-}
-
-/** Wait until the bus is idle (no pending operations). */
-static void i2c_idle(void)
-{
-    while ((SSP1CON2 & 0x1Fu) || SSP1STATbits.R_nW) {
-        /* spin while SEN/RSEN/PEN/RCEN/ACKEN or transmit in progress */
-    }
+    ANSELCbits.ANSC0 = 0;
+    ANSELCbits.ANSC1 = 0;
+    LATCbits.LATC0   = 0;   /* pre-clear latches */
+    LATCbits.LATC1   = 0;
+    SCL_HIGH();              /* bus idle */
+    SDA_HIGH();
 }
 
 static void i2c_start(void)
 {
-    i2c_idle();
-    SSP1CON2bits.SEN = 1;   /* initiate START condition */
-    i2c_wait();
+    SDA_HIGH(); __delay_us(I2C_HALF_US);
+    SCL_HIGH(); __delay_us(I2C_HALF_US);
+    SDA_LOW();  __delay_us(I2C_HALF_US);   /* SDA falls while SCL high */
+    SCL_LOW();  __delay_us(I2C_HALF_US);
 }
 
 static void i2c_stop(void)
 {
-    i2c_idle();
-    SSP1CON2bits.PEN = 1;   /* initiate STOP condition  */
-    i2c_wait();
+    SDA_LOW();  __delay_us(I2C_HALF_US);
+    SCL_HIGH(); __delay_us(I2C_HALF_US);
+    SDA_HIGH(); __delay_us(I2C_HALF_US);   /* SDA rises while SCL high */
 }
 
 /**
- * i2c_write_byte() — Send one byte.  Returns true if ACK received.
+ * i2c_write_byte() — Send one byte MSB-first.  Returns true if ACK received.
  */
 static bool i2c_write_byte(uint8_t data)
 {
-    i2c_idle();
-    SSP1BUF = data;
-    i2c_wait();
-    return (SSP1CON2bits.ACKSTAT == 0);   /* 0 = ACK */
+    uint8_t i;
+    bool    ack;
+    for (i = 0; i < 8u; i++) {
+        if (data & 0x80u) { SDA_HIGH(); } else { SDA_LOW(); }
+        __delay_us(I2C_HALF_US);
+        SCL_HIGH();
+        __delay_us(I2C_HALF_US);
+        SCL_LOW();
+        data <<= 1;
+    }
+    SDA_HIGH();                         /* release SDA for ACK bit  */
+    __delay_us(I2C_HALF_US);
+    SCL_HIGH();
+    __delay_us(I2C_HALF_US);
+    ack = (SDA_READ() == 0);            /* device pulls SDA low = ACK */
+    SCL_LOW();
+    return ack;
 }
 
 /* =========================================================
@@ -121,7 +117,9 @@ static bool i2c_write_byte(uint8_t data)
 static void pcf_write(uint8_t val)
 {
     i2c_start();
-    i2c_write_byte((uint8_t)(LCD_ADDRESS << 1));   /* address + write bit */
+    if (!i2c_write_byte((uint8_t)(LCD_ADDRESS << 1))) {
+        uart_puts("I2C NACK addr\r\n");
+    }
     i2c_write_byte(val);
     i2c_stop();
 }

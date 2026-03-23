@@ -75,8 +75,6 @@ bool ow_reset(void)
 
     __delay_us(410);
 
-    ei();
-
     return presence;
 }
 
@@ -93,7 +91,6 @@ void ow_write_byte(uint8_t b)
             OW_DRIVE_LOW();
             __delay_us(6);
             OW_RELEASE();
-            ei();
             __delay_us(64);
         } else {
             /* Write '0' slot: 60 µs LOW, release, 10 µs recovery */
@@ -101,7 +98,6 @@ void ow_write_byte(uint8_t b)
             OW_DRIVE_LOW();
             __delay_us(60);
             OW_RELEASE();
-            ei();
             __delay_us(10);
         }
         b >>= 1;
@@ -133,7 +129,6 @@ uint8_t ow_read_byte(void)
         if (OW_READ()) {
             b |= 0x80u;              /* MSB position after >> above */
         }
-        ei();
 
         __delay_us(61);              /* 9 + 61 = 70 µs slot total   */
     }
