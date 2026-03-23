@@ -29,7 +29,7 @@
 /* CONFIG2 */
 #pragma config MCLRE    = OFF       /* MCLR pin is GPIO (RA3 = input only)  */
 #pragma config PWRTE    = ON        /* Power-up timer enabled               */
-#pragma config WDTE     = OFF       /* WDT disabled (temporary debug)       */
+#pragma config WDTE     = ON        /* WDT enabled (WDTCPS_13 ≈ 4.7s)      */
 #pragma config LPBOREN  = OFF       /* Low-Power BOR disabled               */
 #pragma config BOREN    = OFF       /* Brown-out disabled — FT232 supply dips during init */
 #pragma config BORV     = LOW       /* BOR voltage: low trip point (~2.45V) */
@@ -70,7 +70,7 @@
 #define TMR1_PRELOAD_L    0xC0u
 
 /* Set to 0 to build a silent production binary (no UART output). */
-#define DEBUG_UART        1
+#define DEBUG_UART        0
 
 /* Set to 1 to disable all LCD output — all lcd_* calls become no-ops.
  * Useful for testing UART / DS18B20 / relay independently of I2C. */

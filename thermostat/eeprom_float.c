@@ -4,14 +4,14 @@
  *
  * NVM registers used:
  *   NVMADRL  — low byte of NVM address
- *   NVMADRH  — high byte of NVM address (always 0 for EEPROM)
+ *   NVMADRH  — high byte of NVM address (0x70 for data EEPROM at 0x7000)
  *   NVMDATL  — data byte
  *   NVMCON1  — control register
  *   NVMCON2  — unlock register (write 0x55 then 0xAA to enable WR)
  *
  * NVMCON1 bit fields (relevant bits):
- *   NVMREGS  (bit 6): 0 = EEPROM / RAM  (select data EEPROM)
- *                     1 = Program Flash
+ *   NVMREGS  (bit 6): 0 = Program Flash  (NVMREGS=0 targets flash; 0x0000 = reset vector)
+ *                     1 = Data EEPROM    (EEPROM mapped at NVM address 0x7000–0x70FF)
  *   WREN     (bit 2): 1 = allow write/erase
  *   WR       (bit 1): set to 1 to start write cycle; hw clears when done
  *   RD       (bit 0): set to 1 to start read;  hw clears immediately
@@ -34,15 +34,25 @@ typedef union {
  * ========================================================= */
 static void eeprom_write_byte(uint8_t addr, uint8_t data)
 {
-    NVMADRH = 0x00u;
+    NVMADRH = 0x70u;             /* EEPROM mapped at 0x7000 in NVM space   */
     NVMADRL = addr;
     NVMDATL = data;
-    NVMCON1bits.NVMREGS = 0;
+    NVMCON1bits.NVMREGS = 1;             /* 1 = data EEPROM (0 = flash)     */
     NVMCON1bits.WREN    = 1;
-    NVMCON2 = 0x55u;
-    NVMCON2 = 0xAAu;
-    NVMCON1bits.WR = 1;
-    /* BISECT: polling loop omitted — not waiting for write to complete */
+    /* Single asm block: compiler cannot insert instructions inside it.      *
+     * Separate asm() calls allow BSR-restore code between them — fatal.    *
+     * INTCON (0x0B) is an all-banks register; no MOVLB needed for BCF GIE. *
+     * Bank 17 (0x880): NVMCON1 offset 0x15, NVMCON2 offset 0x16.           */
+    asm("BCF 0x0B,7\n"           /* GIE = 0 — disable interrupts            */
+        "MOVLB 17\n"             /* BSR = 17 — select NVM register bank      */
+        "MOVLW 0x55\n"
+        "MOVWF 0x16\n"           /* NVMCON2 = 0x55 — unlock step 1           */
+        "MOVLW 0xAA\n"
+        "MOVWF 0x16\n"           /* NVMCON2 = 0xAA — unlock step 2           */
+        "BSF 0x15,1");           /* NVMCON1.WR = 1 — start write (~2 ms)     */
+    while (NVMCON1bits.WR) {     /* wait for hardware to clear WR          */
+        NOP();
+    }
     NVMCON1bits.WREN = 0;
 }
 
@@ -51,10 +61,10 @@ static void eeprom_write_byte(uint8_t addr, uint8_t data)
  * ========================================================= */
 static uint8_t eeprom_read_byte(uint8_t addr)
 {
-    NVMADRH = 0x00u;
+    NVMADRH = 0x70u;             /* EEPROM mapped at 0x7000 in NVM space   */
     NVMADRL = addr;
 
-    NVMCON1bits.NVMREGS = 0;   /* select data EEPROM            */
+    NVMCON1bits.NVMREGS = 1;   /* 1 = data EEPROM (0 = flash)   */
     NVMCON1bits.RD      = 1;   /* initiate read (self-clearing) */
 
     /* RD clears within one instruction cycle on PIC16F18325 */

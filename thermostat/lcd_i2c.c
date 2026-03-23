@@ -230,6 +230,7 @@ void lcd_print_str(const char *s)
     }
 }
 
+#pragma warning disable 520   /* lcd_clear is public API; absence breaks code layout */
 void lcd_clear(void)
 {
     lcd_send_byte(0x01u, 0);

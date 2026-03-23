@@ -9,6 +9,10 @@
 #include "eeprom_float.h"
 #include "uart.h"
 
+/* OPTION_REG not defined in DFP 1.29.444 for PIC16F18325 — declare manually.
+ * Bit 7 = nWPUEN: 0 = weak pull-ups enabled globally, 1 = disabled.         */
+volatile unsigned char OPTION_REG_COMPAT __at(0x095);
+
 #if NO_LCD
 #  define lcd_init()            do { } while(0)
 #  define lcd_backlight(x)      do { } while(0)
@@ -73,6 +77,7 @@ static bool     firstReadDone;
 static uint32_t startupTime;
 static uint32_t lastFlash;
 static bool     flashVisible;
+static bool     tempValid;
 
 /* =========================================================
  * fmt_temp()
@@ -118,20 +123,26 @@ static void update_lcd(float tempC)
 {
     char buf[6];
 
+    /* Line 1: always "Temp:" — dashes until a valid reading exists */
     lcd_set_cursor(0, 0);
-    if (sensor_state == SENSOR_ERROR || sensor_state == SENSOR_LOST) {
-        lcd_print_str(sensor_state == SENSOR_LOST ? "Sensor Lost!    "
-                                                  : "No Sensor!      ");
-    } else {
+    lcd_print_str("Temp:");
+    if (tempValid && sensor_state == SENSOR_OK) {
         fmt_temp(tempC, buf);
-        lcd_print_str("Temp:");
         lcd_print_str(buf);
+        lcd_print_char((char)0xDF);
+        lcd_print_str("C    ");
+    } else {
+        lcd_print_str("--.-");
         lcd_print_char((char)0xDF);
         lcd_print_str("C    ");
     }
 
+    /* Line 2: sensor error → error msg; cutoff → CUTOFF; else → setpoint */
     lcd_set_cursor(0, 1);
-    if (cutoffActive) {
+    if (sensor_state == SENSOR_ERROR || sensor_state == SENSOR_LOST
+            || sensor_state == SENSOR_UNKNOWN) {
+        lcd_print_str("CHK Sensor!  OFF");
+    } else if (cutoffActive) {
         lcd_print_str(relayOn ? "CUTOFF        ON" : "CUTOFF       OFF");
     } else {
         fmt_temp(setpointC, buf);
@@ -153,6 +164,7 @@ static void hardware_init(void)
     RELAY_ANSEL = 0; RELAY_TRIS = 0; RELAY_LAT = 0;
     BTN_UP_TRIS = 1; BTN_DOWN_TRIS = 1;
     BTN_UP_WPU  = 1; BTN_DOWN_WPU  = 1;
+    OPTION_REG_COMPAT &= 0x7Fu;  /* nWPUEN = 0 — enable WPU globally */
     ow_init();
     uart_init();
     T1CON = 0x01u;
@@ -168,7 +180,7 @@ static void apply_setpoint_change(float delta)
     setpointC += delta;
     if (setpointC > SETPOINT_MAX) setpointC = SETPOINT_MAX;
     if (setpointC < SETPOINT_MIN) setpointC = SETPOINT_MIN;
-    /* eeprom_write_float(EEPROM_ADDR, setpointC); */  /* WORKAROUND: write crashes, RAM-only for now */
+    eeprom_write_float(EEPROM_ADDR, setpointC);
     debug_puts(delta > 0.0f ? "Setpoint UP: " : "Setpoint DOWN: ");
     debug_print_float(setpointC, 1);
     debug_puts(" C\r\n");
@@ -191,8 +203,6 @@ void main(void)
     LATCbits.LATC3   = 0;
 
     hardware_init();
-
-    LATCbits.LATC3 = 1;     /* pin 7 HIGH = hardware_init() done */
 
     /* Non-zero defaults (previously static initialisers) */
     btnUpArmed   = true;
@@ -239,7 +249,7 @@ void main(void)
                 lcd_set_cursor(0, 1);
                 lcd_print_str(flashVisible ? " Please wait... " : "                ");
             }
-            if (firstReadDone && (now - startupTime >= STARTUP_MIN_MS)) {
+            if ((firstReadDone || sensor_state != SENSOR_UNKNOWN) && (now - startupTime >= STARTUP_MIN_MS)) {
                 firstRead = false;
                 update_lcd(lastTemp);
             }
@@ -252,8 +262,11 @@ void main(void)
                 if (ds18b20_start_conversion()) {
                     conversionRequested = true;
                 } else {
-                    sensor_state = SENSOR_ERROR;
+                    sensor_state  = SENSOR_ERROR;
                     set_relay(false);
+                    tempValid     = false;
+                    cutoffActive  = false;
+                    firstReadDone = false;  /* next reconnect discards 85°C again */
                     if (!firstRead) update_lcd(lastTemp);
                     debug_puts("No sensor present\r\n");
                 }
@@ -263,25 +276,28 @@ void main(void)
             conversionRequested = false;
             if (ds18b20_read_temp(&tempC)) {
                 sensor_state = SENSOR_OK;
-                lastTemp = tempC;
                 if (!firstReadDone) {
                     firstReadDone = true;
-                }
-                /* Safety cutoff */
-                if (tempC >= MAX_SAFE_TEMP) {
-                    cutoffActive = true;
-                    set_relay(false);
-                } else if (cutoffActive) {
-                    if (tempC < CUTOFF_RESET_TEMP) {
-                        cutoffActive = false;
-                    }
-                }
-                /* Normal relay control (heating) */
-                if (!cutoffActive) {
-                    if (tempC < setpointC - HYSTERESIS) {
-                        set_relay(true);
-                    } else if (tempC >= setpointC) {
+                    /* DS18B20 power-on reset = 85°C — discard entirely */
+                } else {
+                    lastTemp  = tempC;
+                    tempValid = true;
+                    /* Safety cutoff */
+                    if (tempC >= MAX_SAFE_TEMP) {
+                        cutoffActive = true;
                         set_relay(false);
+                    } else if (cutoffActive) {
+                        if (tempC < CUTOFF_RESET_TEMP) {
+                            cutoffActive = false;
+                        }
+                    }
+                    /* Normal relay control (heating) */
+                    if (!cutoffActive) {
+                        if (tempC < setpointC - HYSTERESIS) {
+                            set_relay(true);
+                        } else if (tempC >= setpointC) {
+                            set_relay(false);
+                        }
                     }
                 }
                 debug_puts("Temp: ");
@@ -291,12 +307,15 @@ void main(void)
             } else {
                 sensor_state = SENSOR_LOST;
                 set_relay(false);
+                tempValid     = false;
+                cutoffActive  = false;
+                firstReadDone = false;  /* next reconnect discards 85°C again */
                 if (!firstRead) update_lcd(lastTemp);
                 debug_puts("Sensor read failed\r\n");
             }
         }
 
-        if (now - lastBtnTime >= BTN_DEBOUNCE_MS) {
+        if (!firstRead && now - lastBtnTime >= BTN_DEBOUNCE_MS) {
             curBtnUp   = (BTN_UP_PORT  == 1u);
             curBtnDown = (BTN_DOWN_PORT == 1u);
 
