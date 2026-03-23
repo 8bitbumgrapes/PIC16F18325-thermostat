@@ -1,0 +1,121 @@
+PIC16F18325 Thermostat — PCB Design Reference
+===============================================
+
+PARTS LIST
+----------
+Ref  Part                    Value / Notes
+---  ----                    -------------
+U1   PIC16F18325             14-pin DIP
+C1   Ceramic cap             100nF, close to U1 pin 1/14
+C2   Electrolytic cap        10uF 10V+
+R1   Resistor                10k  (MCLR pull-up)
+R2   Resistor                4.7k (DS18B20 DQ pull-up)
+J1   Screw terminal 2-pin    PSU in -- 5V, GND
+J2   JST-XH 3-pin            DS18B20 -- VDD, DQ, GND
+J3   Pin header 4-pin        LCD I2C -- VCC, GND, SDA, SCL
+J4   Pin header 3-pin        Relay module -- VCC, GND, IN
+J5   Pin header 2-pin        Button UP (to panel)
+J6   Pin header 2-pin        Button DOWN (to panel)
+J7   Pin header 5-pin        ICSP programming header
+
+
+CONNECTIONS
+-----------
+
+Power rail (5V)
+  J1 pin1 (5V) --> U1 pin1  (VDD)
+               --> J2 pin1  (DS18B20 VDD)
+               --> J3 pin1  (LCD VCC)
+               --> J4 pin1  (Relay VCC)
+               --> C1 pin+
+               --> C2 pin+
+               --> R1 pin1
+               --> J7 pin2  (ICSP VDD)
+
+Ground rail
+  J1 pin2 (GND) --> U1 pin14 (VSS)
+                --> J2 pin3  (DS18B20 GND)
+                --> J3 pin2  (LCD GND)
+                --> J4 pin2  (Relay GND)
+                --> C1 pin-
+                --> C2 pin-
+                --> J5 pin2  (BTN_UP GND)
+                --> J6 pin2  (BTN_DOWN GND)
+                --> J7 pin1  (ICSP GND)
+
+MCLR
+  R1 pin2 --> U1 pin4  (RA3/MCLR)
+          --> J7 pin3  (ICSP MCLR)
+
+I2C LCD
+  U1 pin10 (RC0/SCL) --> J3 pin4 (SCL)
+  U1 pin9  (RC1/SDA) --> J3 pin3 (SDA)
+
+DS18B20
+  J2 pin2 (DQ) --> U1 pin8 (RC2)
+               --> R2 pin1
+  R2 pin2      --> 5V rail
+
+Relay
+  U1 pin7 (RC3) --> J4 pin3 (IN)
+
+Button UP
+  U1 pin6 (RC4) --> J5 pin1
+  J5 pin2       --> GND
+
+Button DOWN
+  U1 pin5 (RC5) --> J6 pin1
+  J6 pin2       --> GND
+
+ICSP
+  J7 pin1 --> GND
+  J7 pin2 --> 5V
+  J7 pin3 --> U1 pin4  (MCLR)
+  J7 pin4 --> U1 pin12 (RA1 / PGC)
+  J7 pin5 --> U1 pin13 (RA0 / PGD)
+
+
+SUGGESTED BOARD LAYOUT (~60x50mm)
+----------------------------------
+
+  +------------------------------------------+
+  |  J1        J7                            |
+  |  [PSU]     [ICSP]          J3            |
+  |                            [LCD]         |
+  |                                          |
+  |       C1  C2                             |
+  |       U1 (PIC)      R2    J2             |
+  |                            [DS18B20]     |
+  |  R1                                      |
+  |                     J4                   |
+  |  J5   J6            [Relay]              |
+  |  [BTN][BTN]                              |
+  +------------------------------------------+
+           ^ bottom edge (panel side)
+
+Placement reasoning:
+  J1 (PSU)   -- top-left edge, easy access
+  J7 (ICSP)  -- top edge, PICkit plugs in without disturbing wiring
+  J3 (LCD)   -- right edge, cable exits cleanly
+  J2 (DS18B20) -- right edge next to R2, keeps DQ pull-up trace short
+  U1         -- centre, short runs to everything
+  C1         -- directly beside U1 pin1/pin14 (most important placement)
+  C2         -- next to C1 on power rail
+  J5/J6      -- bottom edge, panel wiring exits that way
+  J4 (relay) -- bottom-right, away from PIC and signal lines
+
+
+ROUTING NOTES
+-------------
+- Run fat 5V and GND traces first as a spine along top and bottom edges
+- GND pour on bottom copper layer recommended
+- Keep SDA/SCL traces away from relay IN trace
+- C1 (100nF) traces must be as short as possible -- highest priority placement
+- DQ (OneWire) needs no special treatment at these speeds
+
+
+FRITZING NOTES
+--------------
+- U1 (PIC16F18325) not in standard Fritzing library
+  Use generic 14-pin DIP IC, rename to PIC16F18325, label pins manually
+- All other parts available in standard Fritzing library
